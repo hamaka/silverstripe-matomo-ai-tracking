@@ -92,10 +92,12 @@ with `user_agent_patterns`.
 
 ## Running the tests
 
-From a Silverstripe project that has this module installed:
+The `tests/` folder is not part of the Packagist download (see `.gitattributes`). Install the module from source
+in a Silverstripe project to run them:
 
 ```sh
-vendor/bin/phpunit vendor/hamaka/silverstripe-matomo-ai-tracking/tests
+composer require hamaka/silverstripe-matomo-ai-tracking --prefer-source
+vendor/bin/phpunit vendor/hamaka/silverstripe-matomo-ai-tracking/tests '' flush=1
 ```
 
 ## License
