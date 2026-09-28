@@ -1,0 +1,12 @@
+---
+Name: matomo-ai-tracking
+Before: '*'
+---
+# Registered as early (outermost) as possible, so responses served by full-page caches further down
+# the chain (e.g. DynamicCacheMiddleware) are tracked as well.
+# Does nothing unless MATOMO_AI_TRACKING_ENABLED is set, see README.md.
+SilverStripe\Core\Injector\Injector:
+  SilverStripe\Control\Director:
+    properties:
+      Middlewares:
+        MatomoAiTrackingMiddleware: '%$Hamaka\MatomoAiTracking\MatomoAiTrackingMiddleware'

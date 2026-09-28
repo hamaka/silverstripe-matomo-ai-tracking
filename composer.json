@@ -1,0 +1,49 @@
+{
+    "name": "hamaka/silverstripe-matomo-ai-tracking",
+    "description": "Track AI chatbot requests (ChatGPT-User, Claude-User, Perplexity-User, ...) in Matomo AI Insights via server-side middleware.",
+    "type": "silverstripe-vendormodule",
+    "homepage": "https://github.com/hamaka/silverstripe-matomo-ai-tracking",
+    "keywords": [
+        "silverstripe",
+        "matomo",
+        "analytics",
+        "ai",
+        "chatbot",
+        "bot-tracking",
+        "middleware",
+        "hamaka"
+    ],
+    "license": "BSD-3-Clause",
+    "authors": [
+        {
+            "name": "Carel Evers",
+            "email": "carel@hamaka.nl",
+            "role": "Developer"
+        }
+    ],
+    "require": {
+        "php": "^8.1",
+        "silverstripe/framework": "^5 || ^6",
+        "guzzlehttp/guzzle": "^7"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.6 || ^11"
+    },
+    "autoload": {
+        "psr-4": {
+            "Hamaka\\MatomoAiTracking\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Hamaka\\MatomoAiTracking\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "branch-alias": {
+            "dev-main": "1.x-dev"
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
