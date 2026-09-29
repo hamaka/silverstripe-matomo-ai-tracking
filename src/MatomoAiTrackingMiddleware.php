@@ -29,10 +29,23 @@ class MatomoAiTrackingMiddleware implements HTTPMiddleware
         $urlAndVars = (string)$request->getURL(true);
         $start      = microtime(true);
 
-        $response = $delegate($request);
-
         try {
-            $hit = $this->buildHit($userAgent, $urlAndVars, $response, microtime(true) - $start);
+            $response = $delegate($request);
+        } catch (Throwable $e) {
+            // an uncaught exception ends up as a 500 error page: track it as such, then let it bubble up
+            $this->track($userAgent, $urlAndVars, null, microtime(true) - $start);
+            throw $e;
+        }
+
+        $this->track($userAgent, $urlAndVars, $response, microtime(true) - $start);
+
+        return $response;
+    }
+
+    protected function track(string $userAgent, string $urlAndVars, ?HTTPResponse $response, float $durationSeconds): void
+    {
+        try {
+            $hit = $this->buildHit($userAgent, $urlAndVars, $response, $durationSeconds);
             if ($hit) {
                 $this->queueHit($hit);
             }
@@ -40,18 +53,20 @@ class MatomoAiTrackingMiddleware implements HTTPMiddleware
             // tracking must never break the response
             Injector::inst()->get(LoggerInterface::class)->warning('MatomoAiTracking: ' . $e->getMessage());
         }
-
-        return $response;
     }
 
     /**
+     * Must be called while the request is being handled: the absolute URL is resolved here, because Director
+     * no longer knows the current request (scheme/host) by the time the shutdown function runs.
+     *
      * @param string $urlAndVars relative URL including query string, as returned by HTTPRequest::getURL(true)
-     * @return array{timestamp:int, path:string, isDownload:bool, status:int, bytes:int, ua:string, responseTimeMs:?int}|null
+     * @param HTTPResponse|null $response null when the request ended in an uncaught exception (tracked as a 500)
+     * @return array{timestamp:int, url:string, isDownload:bool, status:int, bytes:int, ua:string, responseTimeMs:?int}|null
      *         null when tracking is disabled, the user agent is not an AI chatbot, or the path is excluded.
      */
     public function buildHit(string $userAgent, string $urlAndVars, ?HTTPResponse $response, float $durationSeconds): ?array
     {
-        if (!$response || !MatomoTracker::isEnabled()) {
+        if (!MatomoTracker::isEnabled()) {
             return null;
         }
 
@@ -68,10 +83,10 @@ class MatomoAiTrackingMiddleware implements HTTPMiddleware
 
         return [
             'timestamp'      => time(),
-            'path'           => $pathAndQuery,
+            'url'            => MatomoTracker::getSiteUrl() . $pathAndQuery,
             'isDownload'     => $detector->isDownloadPath($path),
-            'status'         => $response->getStatusCode(),
-            'bytes'          => $this->getResponseBytes($response),
+            'status'         => $response ? $response->getStatusCode() : 500,
+            'bytes'          => $response ? $this->getResponseBytes($response) : 0,
             'ua'             => $userAgent,
             'responseTimeMs' => (int)round($durationSeconds * 1000),
         ];

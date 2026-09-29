@@ -20,7 +20,7 @@ use Throwable;
  * - MATOMO_AI_TRACKING_ENABLED   "1" to enable tracking
  * - MATOMO_AI_TRACKING_URL       Matomo base URL, e.g. https://stats.example.com
  * - MATOMO_AI_TRACKING_SITE_ID   Matomo site ID
- * - MATOMO_AI_TRACKING_SITE_URL  (optional) public URL of the site, defaults to Director::absoluteBaseURL()
+ * - MATOMO_AI_TRACKING_SITE_URL  (optional) public URL of the site, defaults to Director::absoluteBaseURL() of the request
  */
 class MatomoTracker
 {
@@ -36,13 +36,20 @@ class MatomoTracker
 
     protected string $matomoUrl;
     protected int $siteId;
-    protected string $siteUrl;
 
     public function __construct()
     {
         $this->matomoUrl = rtrim((string)Environment::getEnv('MATOMO_AI_TRACKING_URL'), '/');
         $this->siteId    = (int)Environment::getEnv('MATOMO_AI_TRACKING_SITE_ID');
-        $this->siteUrl   = rtrim((string)(Environment::getEnv('MATOMO_AI_TRACKING_SITE_URL') ?: Director::absoluteBaseURL()), '/');
+    }
+
+    /**
+     * Public base URL of the site, without trailing slash. Call this while the request is being handled:
+     * afterwards Director no longer knows the request and may fall back to http:// or the wrong host.
+     */
+    public static function getSiteUrl(): string
+    {
+        return rtrim((string)(Environment::getEnv('MATOMO_AI_TRACKING_SITE_URL') ?: Director::absoluteBaseURL()), '/');
     }
 
     public static function isEnabled(): bool
@@ -53,18 +60,14 @@ class MatomoTracker
     }
 
     /**
-     * @param array{timestamp:int, path:string, isDownload:bool, status:int, bytes:int, ua:string, responseTimeMs:?int} $hit
+     * @param array{timestamp:int, url:string, isDownload:bool, status:int, bytes:int, ua:string, responseTimeMs:?int} $hit
      */
     public function track(array $hit): bool
     {
         $body = ['requests' => ['?' . http_build_query($this->buildTrackingParams($hit))]];
 
         try {
-            $client   = new Client([
-                'timeout'         => (float)static::config()->get('timeout_seconds'),
-                'connect_timeout' => (float)static::config()->get('connect_timeout_seconds'),
-            ]);
-            $response = $client->post($this->matomoUrl . '/matomo.php', [
+            $response = $this->createClient()->post($this->matomoUrl . '/matomo.php', [
                 'json'    => $body,
                 'headers' => ['User-Agent' => 'Hamaka-Matomo-AI-Tracking/1.0'],
             ]);
@@ -81,7 +84,22 @@ class MatomoTracker
             return false;
         }
 
+        // Matomo answers "success" even when it rejected the hit (e.g. wrong site ID); those only show up here
+        if ((int)($json['invalid'] ?? 0) > 0) {
+            $this->logWarning('Matomo rejected the hit as invalid (check MATOMO_AI_TRACKING_SITE_ID): ' . substr((string)$response->getBody(), 0, 500));
+
+            return false;
+        }
+
         return true;
+    }
+
+    protected function createClient(): Client
+    {
+        return new Client([
+            'timeout'         => (float)static::config()->get('timeout_seconds'),
+            'connect_timeout' => (float)static::config()->get('connect_timeout_seconds'),
+        ]);
     }
 
     public function buildTrackingParams(array $hit): array
@@ -97,7 +115,7 @@ class MatomoTracker
             'cdt'         => $hit['timestamp'],
         ];
 
-        $params[$hit['isDownload'] ? 'download' : 'url'] = $this->siteUrl . $hit['path'];
+        $params[$hit['isDownload'] ? 'download' : 'url'] = $hit['url'];
 
         if ($hit['responseTimeMs'] !== null) {
             $params['pf_srv'] = $hit['responseTimeMs'];

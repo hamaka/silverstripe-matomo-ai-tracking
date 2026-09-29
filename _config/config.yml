@@ -2,8 +2,9 @@
 Name: matomo-ai-tracking
 Before: '*'
 ---
-# Registered as early (outermost) as possible, so responses served by full-page caches further down
-# the chain (e.g. DynamicCacheMiddleware) are tracked as well.
+# Registered as early (outermost) as possible, so responses served by full-page caches that run as
+# Director middleware further down the chain are tracked as well. Caches that answer before Director
+# (static publishing, index.php-level caches) are never seen.
 # Does nothing unless MATOMO_AI_TRACKING_ENABLED is set, see README.md.
 SilverStripe\Core\Injector\Injector:
   SilverStripe\Control\Director:

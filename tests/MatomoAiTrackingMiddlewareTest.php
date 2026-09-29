@@ -2,8 +2,13 @@
 
 namespace Hamaka\MatomoAiTracking\Tests;
 
+use GuzzleHttp\Client;
+use GuzzleHttp\Handler\MockHandler;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Psr7\Response;
 use Hamaka\MatomoAiTracking\MatomoAiTrackingMiddleware;
 use Hamaka\MatomoAiTracking\MatomoTracker;
+use RuntimeException;
 use SilverStripe\Control\HTTPRequest;
 use SilverStripe\Control\HTTPResponse;
 use SilverStripe\Core\Environment;
@@ -48,7 +53,7 @@ class MatomoAiTrackingMiddlewareTest extends SapphireTest
         $hit = MatomoAiTrackingMiddleware::create()->buildHit(self::UA_CHATGPT, 'news/some-article?x=1', $response, 0.152);
 
         $this->assertNotNull($hit);
-        $this->assertSame('/news/some-article?x=1', $hit['path']);
+        $this->assertSame('https://www.example.com/news/some-article?x=1', $hit['url']);
         $this->assertFalse($hit['isDownload']);
         $this->assertSame(200, $hit['status']);
         $this->assertSame(18, $hit['bytes']);
@@ -94,7 +99,75 @@ class MatomoAiTrackingMiddlewareTest extends SapphireTest
         });
 
         $this->assertCount(1, $middleware->queued);
-        $this->assertSame('/?utm=test', $middleware->queued[0]['path']);
+        $this->assertSame('https://www.example.com/?utm=test', $middleware->queued[0]['url']);
+    }
+
+    public function testTracksUncaughtExceptionAsServerError(): void
+    {
+        $request = new HTTPRequest('GET', 'news', []);
+        $request->addHeader('User-Agent', self::UA_CHATGPT);
+
+        $middleware = new class extends MatomoAiTrackingMiddleware {
+            public array $queued = [];
+
+            protected function queueHit(array $hit): void
+            {
+                $this->queued[] = $hit;
+            }
+        };
+
+        try {
+            $middleware->process($request, function () {
+                throw new RuntimeException('boom');
+            });
+            $this->fail('The exception should bubble up');
+        } catch (RuntimeException $e) {
+            $this->assertSame('boom', $e->getMessage());
+        }
+
+        $this->assertCount(1, $middleware->queued);
+        $this->assertSame(500, $middleware->queued[0]['status']);
+    }
+
+    public function testInvalidHitIsReportedAsFailure(): void
+    {
+        $tracker = $this->createTrackerWithResponse('{"status":"success","tracked":0,"invalid":1,"invalid_indices":[0]}');
+        $this->assertFalse($tracker->track($this->createHit()));
+
+        $tracker = $this->createTrackerWithResponse('{"status":"success","tracked":1,"invalid":0}');
+        $this->assertTrue($tracker->track($this->createHit()));
+    }
+
+    private function createTrackerWithResponse(string $body): MatomoTracker
+    {
+        $tracker = new class extends MatomoTracker {
+            public string $body = '';
+
+            protected function createClient(): Client
+            {
+                return new Client(['handler' => HandlerStack::create(new MockHandler([new Response(200, [], $this->body)]))]);
+            }
+
+            protected function logWarning(string $message): void
+            {
+            }
+        };
+        $tracker->body = $body;
+
+        return $tracker;
+    }
+
+    private function createHit(): array
+    {
+        return [
+            'timestamp'      => time(),
+            'url'            => 'https://www.example.com/news',
+            'isDownload'     => false,
+            'status'         => 200,
+            'bytes'          => 10,
+            'ua'             => self::UA_CHATGPT,
+            'responseTimeMs' => 5,
+        ];
     }
 
     public function testIgnoresNonChatbotsExcludedPathsAndDisabledTracking(): void
