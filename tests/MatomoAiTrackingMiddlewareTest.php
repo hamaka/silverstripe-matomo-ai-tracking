@@ -20,7 +20,17 @@ class MatomoAiTrackingMiddlewareTest extends SapphireTest
 
     private const UA_CHATGPT = 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; ChatGPT-User/1.0; +https://openai.com/bot';
 
-    private const ENV_KEYS = ['MATOMO_AI_TRACKING_ENABLED', 'MATOMO_AI_TRACKING_URL', 'MATOMO_AI_TRACKING_SITE_ID', 'MATOMO_AI_TRACKING_SITE_URL'];
+    private const UA_GPTBOT = 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; GPTBot/1.1; +https://openai.com/gptbot';
+
+    private const ENV_KEYS = [
+        'MATOMO_AI_TRACKING_ENABLED',
+        'MATOMO_AI_TRACKING_URL',
+        'MATOMO_AI_TRACKING_SITE_ID',
+        'MATOMO_AI_TRACKING_SITE_URL',
+        'MATOMO_AI_TRACKING_CRAWLERS_ENABLED',
+        'MATOMO_AI_TRACKING_CRAWLERS_SITE_ID',
+        'MATOMO_AI_TRACKING_CRAWLERS_BOTS_PARAM',
+    ];
 
     private array $envBackup = [];
 
@@ -35,6 +45,9 @@ class MatomoAiTrackingMiddlewareTest extends SapphireTest
         Environment::setEnv('MATOMO_AI_TRACKING_URL', 'https://stats.example.com/');
         Environment::setEnv('MATOMO_AI_TRACKING_SITE_ID', '3');
         Environment::setEnv('MATOMO_AI_TRACKING_SITE_URL', 'https://www.example.com/');
+        Environment::setEnv('MATOMO_AI_TRACKING_CRAWLERS_ENABLED', '');
+        Environment::setEnv('MATOMO_AI_TRACKING_CRAWLERS_SITE_ID', '');
+        Environment::setEnv('MATOMO_AI_TRACKING_CRAWLERS_BOTS_PARAM', '');
     }
 
     protected function tearDown(): void
@@ -53,6 +66,7 @@ class MatomoAiTrackingMiddlewareTest extends SapphireTest
         $hit = MatomoAiTrackingMiddleware::create()->buildHit(self::UA_CHATGPT, 'news/some-article?x=1', $response, 0.152);
 
         $this->assertNotNull($hit);
+        $this->assertSame('chatbot', $hit['type']);
         $this->assertSame('https://www.example.com/news/some-article?x=1', $hit['url']);
         $this->assertFalse($hit['isDownload']);
         $this->assertSame(200, $hit['status']);
@@ -64,6 +78,37 @@ class MatomoAiTrackingMiddlewareTest extends SapphireTest
         $this->assertSame(1, $params['recMode']);
         $this->assertSame('https://www.example.com/news/some-article?x=1', $params['url']);
         $this->assertSame(152, $params['pf_srv']);
+    }
+
+    public function testBuildsRegularTrackingRequestForCrawlerWhenEnabled(): void
+    {
+        Environment::setEnv('MATOMO_AI_TRACKING_CRAWLERS_ENABLED', '1');
+        $response = HTTPResponse::create('<html>12345</html>', 200);
+
+        $hit = MatomoAiTrackingMiddleware::create()->buildHit(self::UA_GPTBOT, 'news/some-article', $response, 0.05);
+
+        $this->assertNotNull($hit);
+        $this->assertSame('crawler', $hit['type']);
+
+        // no recMode: AI Insights drops crawlers; same site ID and no bots=1 unless configured
+        $params = MatomoTracker::create()->buildTrackingParams($hit);
+        $this->assertArrayNotHasKey('recMode', $params);
+        $this->assertArrayNotHasKey('bots', $params);
+        $this->assertSame(3, $params['idsite']);
+        $this->assertSame('https://www.example.com/news/some-article', $params['url']);
+
+        Environment::setEnv('MATOMO_AI_TRACKING_CRAWLERS_SITE_ID', '7');
+        Environment::setEnv('MATOMO_AI_TRACKING_CRAWLERS_BOTS_PARAM', '1');
+        $params = MatomoTracker::create()->buildTrackingParams($hit);
+        $this->assertSame(7, $params['idsite']);
+        $this->assertSame(1, $params['bots']);
+
+        // chatbots keep going to AI Insights on the main site
+        $chatbotHit = MatomoAiTrackingMiddleware::create()->buildHit(self::UA_CHATGPT, 'news', $response, 0.05);
+        $params     = MatomoTracker::create()->buildTrackingParams($chatbotHit);
+        $this->assertSame(3, $params['idsite']);
+        $this->assertSame(1, $params['recMode']);
+        $this->assertArrayNotHasKey('bots', $params);
     }
 
     public function testDetectsDownload(): void
@@ -137,7 +182,6 @@ class MatomoAiTrackingMiddlewareTest extends SapphireTest
         $tracker = $this->createTrackerWithResponse('{"status":"success","tracked":1,"invalid":0}');
         $this->assertTrue($tracker->track($this->createHit()));
     }
-
     private function createTrackerWithResponse(string $body): MatomoTracker
     {
         $tracker = new class extends MatomoTracker {
@@ -177,7 +221,8 @@ class MatomoAiTrackingMiddlewareTest extends SapphireTest
 
         // regular visitor / crawler that Matomo doesn't count as an AI chatbot
         $this->assertNull($middleware->buildHit('Mozilla/5.0 (Windows NT 10.0)', '', $response, 0));
-        $this->assertNull($middleware->buildHit('GPTBot/1.1', '', $response, 0));
+        // crawlers are only sent when crawler tracking is enabled
+        $this->assertNull($middleware->buildHit(self::UA_GPTBOT, '', $response, 0));
         // excluded paths
         $this->assertNull($middleware->buildHit(self::UA_CHATGPT, 'robots.txt', $response, 0));
         $this->assertNull($middleware->buildHit(self::UA_CHATGPT, '_resources/app/client/css/x.css', $response, 0));

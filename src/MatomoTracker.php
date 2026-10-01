@@ -21,6 +21,11 @@ use Throwable;
  * - MATOMO_AI_TRACKING_URL       Matomo base URL, e.g. https://stats.example.com
  * - MATOMO_AI_TRACKING_SITE_ID   Matomo site ID
  * - MATOMO_AI_TRACKING_SITE_URL  (optional) public URL of the site, defaults to Director::absoluteBaseURL() of the request
+ *
+ * AI crawlers (GPTBot, ClaudeBot, ...; ignored by AI Insights), use a separate site ID and bots=1:
+ * - MATOMO_AI_TRACKING_CRAWLERS_ENABLED     "1" to also send AI crawler hits, as regular tracking requests (no recMode)
+ * - MATOMO_AI_TRACKING_CRAWLERS_SITE_ID     (optional) separate Matomo site ID for them, defaults to MATOMO_AI_TRACKING_SITE_ID
+ * - MATOMO_AI_TRACKING_CRAWLERS_BOTS_PARAM  "1" to add bots=1, otherwise Matomo drops requests it recognises as a bot
  */
 class MatomoTracker
 {
@@ -36,11 +41,15 @@ class MatomoTracker
 
     protected string $matomoUrl;
     protected int $siteId;
+    protected int $crawlerSiteId;
+    protected bool $crawlerBotsParam;
 
     public function __construct()
     {
-        $this->matomoUrl = rtrim((string)Environment::getEnv('MATOMO_AI_TRACKING_URL'), '/');
-        $this->siteId    = (int)Environment::getEnv('MATOMO_AI_TRACKING_SITE_ID');
+        $this->matomoUrl        = rtrim((string)Environment::getEnv('MATOMO_AI_TRACKING_URL'), '/');
+        $this->siteId           = (int)Environment::getEnv('MATOMO_AI_TRACKING_SITE_ID');
+        $this->crawlerSiteId    = (int)Environment::getEnv('MATOMO_AI_TRACKING_CRAWLERS_SITE_ID') ?: $this->siteId;
+        $this->crawlerBotsParam = (bool)Environment::getEnv('MATOMO_AI_TRACKING_CRAWLERS_BOTS_PARAM');
     }
 
     /**
@@ -59,8 +68,13 @@ class MatomoTracker
             && (int)Environment::getEnv('MATOMO_AI_TRACKING_SITE_ID') > 0;
     }
 
+    public static function isCrawlerTrackingEnabled(): bool
+    {
+        return static::isEnabled() && (bool)Environment::getEnv('MATOMO_AI_TRACKING_CRAWLERS_ENABLED');
+    }
+
     /**
-     * @param array{timestamp:int, url:string, isDownload:bool, status:int, bytes:int, ua:string, responseTimeMs:?int} $hit
+     * @param array{type?:string, timestamp:int, url:string, isDownload:bool, status:int, bytes:int, ua:string, responseTimeMs:?int} $hit
      */
     public function track(array $hit): bool
     {
@@ -86,7 +100,7 @@ class MatomoTracker
 
         // Matomo answers "success" even when it rejected the hit (e.g. wrong site ID); those only show up here
         if ((int)($json['invalid'] ?? 0) > 0) {
-            $this->logWarning('Matomo rejected the hit as invalid (check MATOMO_AI_TRACKING_SITE_ID): ' . substr((string)$response->getBody(), 0, 500));
+            $this->logWarning('Matomo rejected the hit as invalid (check the site ID): ' . substr((string)$response->getBody(), 0, 500));
 
             return false;
         }
@@ -104,16 +118,26 @@ class MatomoTracker
 
     public function buildTrackingParams(array $hit): array
     {
+        $isCrawler = ($hit['type'] ?? AiBotDetector::TYPE_CHATBOT) === AiBotDetector::TYPE_CRAWLER;
+
         $params = [
-            'idsite'      => $this->siteId,
+            'idsite'      => $isCrawler ? $this->crawlerSiteId : $this->siteId,
             'rec'         => 1,
-            'recMode'     => 1, // bot tracking only: no visits/sessions
             'ua'          => $hit['ua'],
             'http_status' => $hit['status'],
             'bw_bytes'    => $hit['bytes'],
             'source'      => static::config()->get('source_label'),
             'cdt'         => $hit['timestamp'],
         ];
+
+        if ($isCrawler) {
+            // regular tracking request: AI Insights (recMode=1) only counts the chatbots it knows and drops crawlers
+            if ($this->crawlerBotsParam) {
+                $params['bots'] = 1;
+            }
+        } else {
+            $params['recMode'] = 1; // bot tracking only: no visits/sessions
+        }
 
         $params[$hit['isDownload'] ? 'download' : 'url'] = $hit['url'];
 

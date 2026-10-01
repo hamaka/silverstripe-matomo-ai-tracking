@@ -68,6 +68,9 @@ use SilverStripe\Core\Config\Config;
 Config::modify()->set(AiBotDetector::class, 'user_agent_patterns', ['ChatGPT-User', 'Claude-User']);
 ```
 
+**AI crawlers**: `crawler_user_agent_patterns` works the same way (a list, merged from YAML). It is only used when
+crawler tracking is enabled, see [AI crawlers](#ai-crawlers).
+
 **Tracker settings**:
 
 ```yml
@@ -80,8 +83,9 @@ Hamaka\MatomoAiTracking\MatomoTracker:
 ## How it works
 
 - `MatomoAiTrackingMiddleware` is registered as the outermost Director middleware (`Before: '*'`).
-- Only user agents that Matomo counts as AI chatbots are sent. Crawlers such as GPTBot and ClaudeBot are ignored by
-  Matomo in bot mode, so they are skipped here as well.
+- Only user agents that Matomo counts as AI chatbots are sent to AI Insights. Crawlers such as GPTBot and ClaudeBot
+  are ignored by Matomo in bot mode, so they are skipped, unless you enable
+  [crawler tracking](#ai-crawlers).
 - Status code, response size and server response time (`pf_srv`) are sent along. A request that ends in an uncaught
   exception is tracked as a 500.
 - The call to Matomo happens in a shutdown function, after the response has been sent. Under PHP-FPM the connection
@@ -90,6 +94,37 @@ Hamaka\MatomoAiTracking\MatomoTracker:
 - A `warning` is logged and the hit is dropped when Matomo is unreachable, returns an error, or rejects the hit as
   invalid (for example a wrong site ID: Matomo still answers "success" then, with an `invalid` count). The response
   to the bot is never affected.
+
+## AI crawlers
+
+Matomo AI Insights only counts the AI chatbots that fetch pages live for a user. Crawlers that collect content for
+training or for an AI search index (GPTBot, ClaudeBot, CCBot, OAI-SearchBot, PerplexityBot, Meta-ExternalAgent,
+Bytespider, Amazonbot, …) are dropped. To measure them anyway, the module can send them as **regular** tracking
+requests (without `recMode=1`).
+
+Create a separate website in Matomo for the crawler hits (e.g. "example.com – AI crawlers"), then:
+
+```dotenv
+MATOMO_AI_TRACKING_CRAWLERS_ENABLED="1"
+MATOMO_AI_TRACKING_CRAWLERS_SITE_ID="12"
+MATOMO_AI_TRACKING_CRAWLERS_BOTS_PARAM="1"
+```
+
+- **`bots=1` is required.** Without it Matomo recognises crawlers such as GPTBot as bots and silently discards them.
+  Leave it off only if a plugin picks up bots itself, such as [Bot Tracker](https://plugins.matomo.org/BotTracker)
+  (not tested).
+- **Use a separate site.** With `bots=1` the crawlers are recorded as ordinary visits and page views, without a bot
+  flag. In your main site they would inflate the visitor statistics. `MATOMO_AI_TRACKING_CRAWLERS_SITE_ID` defaults
+  to `MATOMO_AI_TRACKING_SITE_ID`, so always set it.
+- The visits show the IP address and location of your webserver, not of the crawler, and no page title.
+
+Matomo's response does not tell whether a hit was excluded (it may still report it as `tracked`), so check the
+Visits Log of the crawler site to see whether hits arrive. When testing, mind Matomo's excluded IPs: hits sent from
+an excluded IP (such as your office) are discarded as well.
+
+Crawlers can cause a lot of requests; keep an eye on the load on your Matomo server. Google-Extended and
+Applebot-Extended cannot be measured: they are robots.txt tokens, the actual crawling is done by Googlebot and
+Applebot.
 
 ## Full-page caches
 

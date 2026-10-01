@@ -12,7 +12,8 @@ use SilverStripe\Core\Injector\Injector;
 use Throwable;
 
 /**
- * Sends requests from AI chatbots to Matomo AI Insights (see MatomoTracker).
+ * Sends requests from AI chatbots to Matomo AI Insights, and optionally requests from AI crawlers as regular tracking
+ * requests (see MatomoTracker).
  *
  * Must run before any full-page cache middleware, otherwise cached hits are missed (see _config/config.yml).
  * Files the webserver serves directly (e.g. existing files in assets/) never reach PHP and are not seen.
@@ -61,8 +62,9 @@ class MatomoAiTrackingMiddleware implements HTTPMiddleware
      *
      * @param string $urlAndVars relative URL including query string, as returned by HTTPRequest::getURL(true)
      * @param HTTPResponse|null $response null when the request ended in an uncaught exception (tracked as a 500)
-     * @return array{timestamp:int, url:string, isDownload:bool, status:int, bytes:int, ua:string, responseTimeMs:?int}|null
-     *         null when tracking is disabled, the user agent is not an AI chatbot, or the path is excluded.
+     * @return array{type:string, timestamp:int, url:string, isDownload:bool, status:int, bytes:int, ua:string, responseTimeMs:?int}|null
+     *         null when tracking is disabled, the user agent is not an AI chatbot (or an AI crawler while crawler
+     *         tracking is enabled), or the path is excluded.
      */
     public function buildHit(string $userAgent, string $urlAndVars, ?HTTPResponse $response, float $durationSeconds): ?array
     {
@@ -71,7 +73,8 @@ class MatomoAiTrackingMiddleware implements HTTPMiddleware
         }
 
         $detector = AiBotDetector::create();
-        if (!$detector->isChatbot($userAgent)) {
+        $type     = $detector->getBotType($userAgent);
+        if ($type === null || ($type === AiBotDetector::TYPE_CRAWLER && !MatomoTracker::isCrawlerTrackingEnabled())) {
             return null;
         }
 
@@ -82,6 +85,7 @@ class MatomoAiTrackingMiddleware implements HTTPMiddleware
         }
 
         return [
+            'type'           => $type,
             'timestamp'      => time(),
             'url'            => MatomoTracker::getSiteUrl() . $pathAndQuery,
             'isDownload'     => $detector->isDownloadPath($path),
