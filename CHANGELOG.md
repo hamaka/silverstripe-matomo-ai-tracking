@@ -5,6 +5,9 @@
 - Optionally track AI crawlers (GPTBot, ClaudeBot, CCBot, OAI-SearchBot, PerplexityBot, …), which Matomo AI
   Insights ignores. They are sent as regular tracking requests with `bots=1` to a separate Matomo site. Off by
   default, see `MATOMO_AI_TRACKING_CRAWLERS_*` in the README. Chatbot tracking is unchanged.
+- Track an `HTTPResponse_Exception` thrown by middleware further down (e.g. a redirect) with its own status code
+  instead of 500.
+- README: how to keep query parameters out of Matomo, and the `.htaccess` rule for crawlers.
 
 ## 1.1.0
 

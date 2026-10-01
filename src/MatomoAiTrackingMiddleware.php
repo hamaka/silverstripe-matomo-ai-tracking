@@ -5,6 +5,7 @@ namespace Hamaka\MatomoAiTracking;
 use Psr\Log\LoggerInterface;
 use SilverStripe\Control\HTTPRequest;
 use SilverStripe\Control\HTTPResponse;
+use SilverStripe\Control\HTTPResponse_Exception;
 use SilverStripe\Control\HTTPStreamResponse;
 use SilverStripe\Control\Middleware\HTTPMiddleware;
 use SilverStripe\Core\Injector\Injectable;
@@ -32,6 +33,10 @@ class MatomoAiTrackingMiddleware implements HTTPMiddleware
 
         try {
             $response = $delegate($request);
+        } catch (HTTPResponse_Exception $e) {
+            // thrown by middleware further down (e.g. a redirect or 403); HTTPApplication turns it into this response
+            $this->track($userAgent, $urlAndVars, $e->getResponse(), microtime(true) - $start);
+            throw $e;
         } catch (Throwable $e) {
             // an uncaught exception ends up as a 500 error page: track it as such, then let it bubble up
             $this->track($userAgent, $urlAndVars, null, microtime(true) - $start);

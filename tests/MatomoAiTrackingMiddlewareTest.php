@@ -11,6 +11,7 @@ use Hamaka\MatomoAiTracking\MatomoTracker;
 use RuntimeException;
 use SilverStripe\Control\HTTPRequest;
 use SilverStripe\Control\HTTPResponse;
+use SilverStripe\Control\HTTPResponse_Exception;
 use SilverStripe\Core\Environment;
 use SilverStripe\Dev\SapphireTest;
 
@@ -83,6 +84,7 @@ class MatomoAiTrackingMiddlewareTest extends SapphireTest
     public function testBuildsRegularTrackingRequestForCrawlerWhenEnabled(): void
     {
         Environment::setEnv('MATOMO_AI_TRACKING_CRAWLERS_ENABLED', '1');
+        Environment::setEnv('MATOMO_AI_TRACKING_CRAWLERS_SITE_ID', '7');
         $response = HTTPResponse::create('<html>12345</html>', 200);
 
         $hit = MatomoAiTrackingMiddleware::create()->buildHit(self::UA_GPTBOT, 'news/some-article', $response, 0.05);
@@ -90,18 +92,17 @@ class MatomoAiTrackingMiddlewareTest extends SapphireTest
         $this->assertNotNull($hit);
         $this->assertSame('crawler', $hit['type']);
 
-        // no recMode: AI Insights drops crawlers; same site ID and no bots=1 unless configured
+        // no recMode: AI Insights drops crawlers; own site ID and bots=1 by default
         $params = MatomoTracker::create()->buildTrackingParams($hit);
         $this->assertArrayNotHasKey('recMode', $params);
-        $this->assertArrayNotHasKey('bots', $params);
-        $this->assertSame(3, $params['idsite']);
+        $this->assertSame(1, $params['bots']);
+        $this->assertSame(7, $params['idsite']);
         $this->assertSame('https://www.example.com/news/some-article', $params['url']);
 
-        Environment::setEnv('MATOMO_AI_TRACKING_CRAWLERS_SITE_ID', '7');
-        Environment::setEnv('MATOMO_AI_TRACKING_CRAWLERS_BOTS_PARAM', '1');
+        // bots=1 can be switched off explicitly (for plugins that pick up bots themselves)
+        Environment::setEnv('MATOMO_AI_TRACKING_CRAWLERS_BOTS_PARAM', '0');
         $params = MatomoTracker::create()->buildTrackingParams($hit);
-        $this->assertSame(7, $params['idsite']);
-        $this->assertSame(1, $params['bots']);
+        $this->assertArrayNotHasKey('bots', $params);
 
         // chatbots keep going to AI Insights on the main site
         $chatbotHit = MatomoAiTrackingMiddleware::create()->buildHit(self::UA_CHATGPT, 'news', $response, 0.05);
@@ -109,6 +110,30 @@ class MatomoAiTrackingMiddlewareTest extends SapphireTest
         $this->assertSame(3, $params['idsite']);
         $this->assertSame(1, $params['recMode']);
         $this->assertArrayNotHasKey('bots', $params);
+    }
+
+    public function testCrawlerTrackingRequiresSeparateSiteId(): void
+    {
+        Environment::setEnv('MATOMO_AI_TRACKING_CRAWLERS_ENABLED', '1');
+        $middleware = MatomoAiTrackingMiddleware::create();
+        $response   = HTTPResponse::create('x', 200);
+
+        // missing: crawlers would end up as visits in the main site
+        $this->assertFalse(MatomoTracker::isCrawlerTrackingEnabled());
+        $this->assertNull($middleware->buildHit(self::UA_GPTBOT, 'news', $response, 0));
+
+        // same as the main site
+        Environment::setEnv('MATOMO_AI_TRACKING_CRAWLERS_SITE_ID', '3');
+        $this->assertFalse(MatomoTracker::isCrawlerTrackingEnabled());
+
+        Environment::setEnv('MATOMO_AI_TRACKING_CRAWLERS_SITE_ID', '7');
+        $this->assertTrue(MatomoTracker::isCrawlerTrackingEnabled());
+        $this->assertNotNull($middleware->buildHit(self::UA_GPTBOT, 'news', $response, 0));
+
+        // chatbots don't depend on it
+        Environment::setEnv('MATOMO_AI_TRACKING_CRAWLERS_ENABLED', '');
+        Environment::setEnv('MATOMO_AI_TRACKING_CRAWLERS_SITE_ID', '');
+        $this->assertNotNull($middleware->buildHit(self::UA_CHATGPT, 'news', $response, 0));
     }
 
     public function testDetectsDownload(): void
@@ -172,6 +197,34 @@ class MatomoAiTrackingMiddlewareTest extends SapphireTest
 
         $this->assertCount(1, $middleware->queued);
         $this->assertSame(500, $middleware->queued[0]['status']);
+    }
+
+    public function testTracksStatusOfHttpResponseException(): void
+    {
+        $request = new HTTPRequest('GET', 'old-page', []);
+        $request->addHeader('User-Agent', self::UA_CHATGPT);
+
+        $middleware = new class extends MatomoAiTrackingMiddleware {
+            public array $queued = [];
+
+            protected function queueHit(array $hit): void
+            {
+                $this->queued[] = $hit;
+            }
+        };
+
+        // e.g. a middleware further down that redirects by throwing
+        try {
+            $middleware->process($request, function () {
+                throw new HTTPResponse_Exception(HTTPResponse::create()->redirect('/new-page', 301));
+            });
+            $this->fail('The exception should bubble up');
+        } catch (HTTPResponse_Exception $e) {
+            $this->assertSame(301, $e->getResponse()->getStatusCode());
+        }
+
+        $this->assertCount(1, $middleware->queued);
+        $this->assertSame(301, $middleware->queued[0]['status']);
     }
 
     public function testInvalidHitIsReportedAsFailure(): void

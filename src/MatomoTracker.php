@@ -22,10 +22,12 @@ use Throwable;
  * - MATOMO_AI_TRACKING_SITE_ID   Matomo site ID
  * - MATOMO_AI_TRACKING_SITE_URL  (optional) public URL of the site, defaults to Director::absoluteBaseURL() of the request
  *
- * AI crawlers (GPTBot, ClaudeBot, ...; ignored by AI Insights), use a separate site ID and bots=1:
- * - MATOMO_AI_TRACKING_CRAWLERS_ENABLED     "1" to also send AI crawler hits, as regular tracking requests (no recMode)
- * - MATOMO_AI_TRACKING_CRAWLERS_SITE_ID     (optional) separate Matomo site ID for them, defaults to MATOMO_AI_TRACKING_SITE_ID
- * - MATOMO_AI_TRACKING_CRAWLERS_BOTS_PARAM  "1" to add bots=1, otherwise Matomo drops requests it recognises as a bot
+ * AI crawlers (GPTBot, ClaudeBot, ...; ignored by AI Insights), sent as regular tracking requests (no recMode):
+ * - MATOMO_AI_TRACKING_CRAWLERS_ENABLED     "1" to also send AI crawler hits
+ * - MATOMO_AI_TRACKING_CRAWLERS_SITE_ID     separate Matomo site ID for them, required: must differ from
+ *                                           MATOMO_AI_TRACKING_SITE_ID, crawlers would otherwise inflate its visitor stats
+ * - MATOMO_AI_TRACKING_CRAWLERS_BOTS_PARAM  (optional) "0" to leave out bots=1, only for plugins that pick up bots
+ *                                           themselves; without bots=1 Matomo discards requests it recognises as a bot
  */
 class MatomoTracker
 {
@@ -48,8 +50,8 @@ class MatomoTracker
     {
         $this->matomoUrl        = rtrim((string)Environment::getEnv('MATOMO_AI_TRACKING_URL'), '/');
         $this->siteId           = (int)Environment::getEnv('MATOMO_AI_TRACKING_SITE_ID');
-        $this->crawlerSiteId    = (int)Environment::getEnv('MATOMO_AI_TRACKING_CRAWLERS_SITE_ID') ?: $this->siteId;
-        $this->crawlerBotsParam = (bool)Environment::getEnv('MATOMO_AI_TRACKING_CRAWLERS_BOTS_PARAM');
+        $this->crawlerSiteId    = (int)Environment::getEnv('MATOMO_AI_TRACKING_CRAWLERS_SITE_ID');
+        $this->crawlerBotsParam = static::getCrawlerBotsParam();
     }
 
     /**
@@ -68,9 +70,27 @@ class MatomoTracker
             && (int)Environment::getEnv('MATOMO_AI_TRACKING_SITE_ID') > 0;
     }
 
+    /**
+     * Also requires a crawler site ID of its own: with bots=1 crawlers are recorded as ordinary visits.
+     */
     public static function isCrawlerTrackingEnabled(): bool
     {
-        return static::isEnabled() && (bool)Environment::getEnv('MATOMO_AI_TRACKING_CRAWLERS_ENABLED');
+        $crawlerSiteId = (int)Environment::getEnv('MATOMO_AI_TRACKING_CRAWLERS_SITE_ID');
+
+        return static::isEnabled()
+            && (bool)Environment::getEnv('MATOMO_AI_TRACKING_CRAWLERS_ENABLED')
+            && $crawlerSiteId > 0
+            && $crawlerSiteId !== (int)Environment::getEnv('MATOMO_AI_TRACKING_SITE_ID');
+    }
+
+    /**
+     * bots=1 is on unless MATOMO_AI_TRACKING_CRAWLERS_BOTS_PARAM is explicitly set to a false value ("0").
+     */
+    protected static function getCrawlerBotsParam(): bool
+    {
+        $value = Environment::getEnv('MATOMO_AI_TRACKING_CRAWLERS_BOTS_PARAM');
+
+        return $value === false || $value === null || $value === '' || (bool)$value;
     }
 
     /**

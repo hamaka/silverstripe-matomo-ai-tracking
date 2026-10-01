@@ -41,6 +41,9 @@ Silverstripe recognises the request as https (`SS_TRUSTED_PROXY_IPS`), or set `M
 
 No token is needed: hits are always sent in real time.
 
+The full URL including the query string is sent. To keep parameters such as `token` or `email` out of Matomo, add them
+to **Excluded Parameters** in the Matomo website settings (or globally). `/Security` is never sent.
+
 Tip: only enable it on live (or point test environments to a separate Matomo site ID), otherwise test hits end up
 in your production statistics.
 
@@ -87,7 +90,7 @@ Hamaka\MatomoAiTracking\MatomoTracker:
   are ignored by Matomo in bot mode, so they are skipped, unless you enable
   [crawler tracking](#ai-crawlers).
 - Status code, response size and server response time (`pf_srv`) are sent along. A request that ends in an uncaught
-  exception is tracked as a 500.
+  exception is tracked as a 500; an `HTTPResponse_Exception` thrown further down (e.g. a redirect) with its own status.
 - The call to Matomo happens in a shutdown function, after the response has been sent. Under PHP-FPM the connection
   to the bot is closed first (`fastcgi_finish_request()`). Under mod_php the connection stays open until the call
   is done (max. `timeout_seconds`).
@@ -107,16 +110,17 @@ Create a separate website in Matomo for the crawler hits (e.g. "example.com – 
 ```dotenv
 MATOMO_AI_TRACKING_CRAWLERS_ENABLED="1"
 MATOMO_AI_TRACKING_CRAWLERS_SITE_ID="12"
-MATOMO_AI_TRACKING_CRAWLERS_BOTS_PARAM="1"
 ```
 
-- **`bots=1` is required.** Without it Matomo recognises crawlers such as GPTBot as bots and silently discards them.
-  Leave it off only if a plugin picks up bots itself, such as [Bot Tracker](https://plugins.matomo.org/BotTracker)
-  (not tested).
-- **Use a separate site.** With `bots=1` the crawlers are recorded as ordinary visits and page views, without a bot
-  flag. In your main site they would inflate the visitor statistics. `MATOMO_AI_TRACKING_CRAWLERS_SITE_ID` defaults
-  to `MATOMO_AI_TRACKING_SITE_ID`, so always set it.
-- The visits show the IP address and location of your webserver, not of the crawler, and no page title.
+- **A separate site is required.** Crawlers are recorded as ordinary visits and page views, without a bot flag, so
+  in your main site they would inflate the visitor statistics. Crawler tracking stays off unless
+  `MATOMO_AI_TRACKING_CRAWLERS_SITE_ID` is set and differs from `MATOMO_AI_TRACKING_SITE_ID`.
+- **`bots=1` is sent by default.** Without it Matomo recognises crawlers such as GPTBot as bots and silently discards
+  them. Set `MATOMO_AI_TRACKING_CRAWLERS_BOTS_PARAM="0"` only if a plugin picks up bots itself, such as
+  [Bot Tracker](https://plugins.matomo.org/BotTracker) (not tested).
+- **Count actions, not visits.** All hits come from the IP address of your webserver, so Matomo groups the hits of one
+  crawler within its visit window (30 minutes by default) into a single visit with many actions. The visits show the
+  location of your webserver, not of the crawler, and no page title.
 
 Matomo's response does not tell whether a hit was excluded (it may still report it as `tracked`), so check the
 Visits Log of the crawler site to see whether hits arrive. When testing, mind Matomo's excluded IPs: hits sent from
@@ -164,7 +168,8 @@ The rule uses `[.]` instead of `\.` on purpose: backslashes in that template are
 nginx: use an equivalent `location` block with an `if ($http_user_agent ~* ...)` rewrite to `index.php`.
 
 Check that Silverstripe then actually serves the file (status 200) on your setup. Keep the list of bots in sync
-with `user_agent_patterns`.
+with `user_agent_patterns`. With [crawler tracking](#ai-crawlers) enabled, add the names from
+`crawler_user_agent_patterns` as well if you want to see which documents crawlers fetch.
 
 ## Running the tests
 
